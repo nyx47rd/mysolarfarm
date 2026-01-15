@@ -329,13 +329,40 @@ function App() {
   };
 
   const handleReset = () => {
-    // Increased difficulty: requires typing 'DELETE'
+    // Requires typing 'DELETE' to confirm
     const userInput = window.prompt("FACTORY RESET WARNING:\nThis will permanently delete your farm, inventory, and credits.\n\nTo confirm, type 'DELETE' in all caps below:");
     
     if (userInput === 'DELETE') {
-        localStorage.removeItem(STORAGE_KEY);
-        // Force state reset immediately
-        setGameState(getInitialState());
+        // 1. Create a clean state object explicitly
+        const cleanState: GameState = {
+            money: INITIAL_MONEY,
+            credits: 0,
+            grid: Array.from({ length: TOTAL_CELLS }, (_, i) => ({ id: i, itemId: null })),
+            inventory: {},
+            shopStock: getInitialStocks(),
+            nextStockRefresh: Date.now() + STOCK_REFRESH_MS,
+            lastSaveTime: Date.now(),
+            totalProductionRate: 0,
+            rebirthLevel: 0,
+            multiplier: 1,
+            isExchangeUnlocked: false,
+            lastCreditClaimTime: 0,
+            level: 1
+        };
+
+        // 2. FORCE SAVE the clean state to storage immediately.
+        // We do this instead of removeItem to prevent any pending auto-save interval
+        // from writing old state back to storage before the reload happens.
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(cleanState));
+        } catch (e) {
+            console.error("Reset failed", e);
+        }
+        
+        // 3. Update React state immediately (visual feedback)
+        setGameState(cleanState);
+        
+        // 4. Force Reload
         window.location.reload();
     } else if (userInput !== null) {
         alert("Reset cancelled. Text did not match 'DELETE'.");

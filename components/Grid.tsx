@@ -40,7 +40,7 @@ export const Grid: React.FC<GridProps> = ({ grid, onCellClick, onCellDrop, selec
   };
 
   return (
-    <div className="w-full max-w-lg mx-auto aspect-square bg-slate-800/50 rounded-xl border border-slate-700 p-2 sm:p-4 shadow-2xl overflow-hidden relative">
+    <div className="w-full max-w-lg mx-auto bg-slate-800/50 rounded-xl border border-slate-700 p-2 sm:p-4 shadow-2xl overflow-hidden relative">
       
       {/* Grid Overlay for Store Mode */}
       {isStoreMode && (
@@ -50,15 +50,15 @@ export const Grid: React.FC<GridProps> = ({ grid, onCellClick, onCellDrop, selec
       )}
 
       <div 
-        className="grid gap-1 w-full h-full"
+        className="grid gap-1 w-full"
         style={{ gridTemplateColumns: `repeat(${GRID_SIZE}, minmax(0, 1fr))` }}
       >
         {grid.map((cell, index) => {
           const item = cell.itemId ? SHOP_ITEMS.find(i => i.id === cell.itemId) : null;
           const hasInventory = inventoryCount > 0;
           
-          // Added aspect-square to force 1:1 ratio on the cell itself
-          let cellClass = "aspect-square relative w-full h-full rounded-md flex items-center justify-center transition-all duration-200 ";
+          // aspect-square ensures 1:1 ratio for each cell independently
+          let cellClass = "aspect-square relative w-full rounded-md flex items-center justify-center transition-all duration-200 ";
           
           if (item) {
             if (isStoreMode) {
