@@ -42,7 +42,6 @@ export const Grid: React.FC<GridProps> = ({ grid, onCellClick, onCellDrop, selec
   return (
     <div className="w-full max-w-lg mx-auto bg-slate-800/50 rounded-xl border border-slate-700 p-2 sm:p-4 shadow-2xl overflow-hidden relative">
       
-      {/* Grid Overlay for Store Mode */}
       {isStoreMode && (
           <div className="absolute top-2 right-2 z-10 bg-blue-500 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg animate-pulse pointer-events-none flex items-center gap-1">
             <Icon name="Archive" size={12} /> STORE MODE
@@ -50,14 +49,13 @@ export const Grid: React.FC<GridProps> = ({ grid, onCellClick, onCellDrop, selec
       )}
 
       <div 
-        className="grid gap-1 w-full"
+        className="grid gap-1 sm:gap-2 w-full"
         style={{ gridTemplateColumns: `repeat(${GRID_SIZE}, minmax(0, 1fr))` }}
       >
         {grid.map((cell, index) => {
           const item = cell.itemId ? SHOP_ITEMS.find(i => i.id === cell.itemId) : null;
           const hasInventory = inventoryCount > 0;
           
-          // aspect-square ensures 1:1 ratio for each cell independently
           let cellClass = "aspect-square relative w-full rounded-md flex items-center justify-center transition-all duration-200 ";
           
           if (item) {
@@ -67,7 +65,6 @@ export const Grid: React.FC<GridProps> = ({ grid, onCellClick, onCellDrop, selec
                 cellClass += `${item.color} shadow-lg border border-white/20 hover:brightness-110 active:scale-95 cursor-grab active:cursor-grabbing `;
             }
           } else {
-             // Empty cell
              if (selectedItem && hasInventory && !isStoreMode) {
                 cellClass += "bg-slate-700/50 border-2 border-dashed border-green-500/50 hover:bg-green-500/20 cursor-pointer hover:scale-105 ";
              } else {

@@ -8,9 +8,9 @@ import { Rebirth } from './components/Rebirth';
 import { Inventory } from './components/Inventory';
 import { GameState, ShopItem, ViewType } from './types';
 import { TOTAL_CELLS, INITIAL_MONEY, SHOP_ITEMS, TICK_RATE_MS, AUTO_SAVE_MS, REBIRTH_BASE_COST, REBIRTH_MULTIPLIER_STEP, EXCHANGE_UNLOCK_COST, STOCK_REFRESH_MS, LEVEL_SCALING_FACTOR, MAX_LEVEL, CREDIT_CLAIM_COST, REBIRTH_BONUS_MONEY, ONE_WEEK_MS } from './constants';
-import { RefreshCw, X, Archive } from 'lucide-react';
+import { RefreshCw, X, Archive, Save } from 'lucide-react';
 
-const STORAGE_KEY = 'solar_farm_save_v6';
+const STORAGE_KEY = 'solar_farm_save_v7'; // Bumped version to invalidate old corrupt saves
 
 // Server Time Utility
 const fetchServerTimeOffset = async (): Promise<number> => {
@@ -22,7 +22,7 @@ const fetchServerTimeOffset = async (): Promise<number> => {
         const localTime = Date.now();
         return serverTime - localTime; // Offset to add to local time
     } catch (e) {
-        console.warn("Could not sync time, defaulting to local.", e);
+        // Silent fail to local time
         return 0;
     }
 };
@@ -35,26 +35,38 @@ const getInitialStocks = () => {
     return stocks;
 };
 
+// Robust Initial State Loader
 const getInitialState = (): GameState => {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (saved) {
-    try {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
       const parsed = JSON.parse(saved);
+      
+      // Validation: Check for corrupted numbers (NaN/Infinity)
+      if (!Number.isFinite(parsed.money)) parsed.money = INITIAL_MONEY;
+      if (!Number.isFinite(parsed.level)) parsed.level = 1;
+      
       return {
-        ...parsed,
+        money: parsed.money ?? INITIAL_MONEY,
+        credits: parsed.credits ?? 0,
+        grid: Array.isArray(parsed.grid) ? parsed.grid : Array.from({ length: TOTAL_CELLS }, (_, i) => ({ id: i, itemId: null })),
         inventory: parsed.inventory || {},
         shopStock: parsed.shopStock || getInitialStocks(),
         nextStockRefresh: parsed.nextStockRefresh || Date.now() + STOCK_REFRESH_MS,
+        lastSaveTime: parsed.lastSaveTime || Date.now(),
+        totalProductionRate: parsed.totalProductionRate || 0,
         rebirthLevel: parsed.rebirthLevel || 0,
         multiplier: parsed.multiplier || 1,
         isExchangeUnlocked: parsed.isExchangeUnlocked || false,
         lastCreditClaimTime: parsed.lastCreditClaimTime || 0,
         level: parsed.level || 1
       };
-    } catch (e) {
-      console.error("Save file corrupted, resetting.");
     }
+  } catch (e) {
+    console.warn("Save file corrupted. Starting fresh.", e);
   }
+  
+  // Default State
   return {
     money: INITIAL_MONEY,
     credits: 0,
@@ -80,7 +92,10 @@ function App() {
   const [serverOffset, setServerOffset] = useState<number>(0);
   const [isTimeSynced, setIsTimeSynced] = useState(false);
   
+  // Ref to hold state for auto-save interval
   const gameStateRef = useRef(gameState);
+  // Ref to block saving during reset
+  const isResettingRef = useRef(false);
 
   useEffect(() => {
     gameStateRef.current = gameState;
@@ -105,8 +120,6 @@ function App() {
     }, 0);
     
     // Calculate Level
-    // Formula derived from constant: Level = sqrt(Money / Factor) + 1
-    // Capped at MAX_LEVEL
     const rawLevel = Math.floor(Math.sqrt(gameState.money / LEVEL_SCALING_FACTOR)) + 1;
     const newLevel = Math.min(rawLevel, MAX_LEVEL);
 
@@ -120,41 +133,35 @@ function App() {
   // Tick Loop
   useEffect(() => {
     const tick = setInterval(() => {
+      if (isResettingRef.current) return; // Don't tick if resetting
+
       const now = getServerTime();
-      
       setGameState(current => {
         let newState = {
             ...current,
             money: current.money + (current.totalProductionRate * current.multiplier)
         };
-
         // Stock Refresh Logic
         if (now > current.nextStockRefresh) {
             newState.shopStock = getInitialStocks();
             newState.nextStockRefresh = now + STOCK_REFRESH_MS;
         }
-
         return newState;
       });
     }, TICK_RATE_MS);
 
     return () => clearInterval(tick);
-  }, [serverOffset]); // Re-bind if offset changes (rare)
+  }, [serverOffset]); 
 
   // Auto Save
   useEffect(() => {
     const saveInterval = setInterval(() => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(gameStateRef.current));
+      if (!isResettingRef.current) {
+         localStorage.setItem(STORAGE_KEY, JSON.stringify(gameStateRef.current));
+      }
     }, AUTO_SAVE_MS);
     return () => clearInterval(saveInterval);
   }, []);
-
-  // --- View Handling ---
-  const handleViewChange = (view: ViewType) => {
-      setCurrentView(view);
-      setIsStoreMode(false);
-      if (view !== 'FARM') setSelectedShopItem(null);
-  };
 
   // --- Actions ---
 
@@ -198,7 +205,7 @@ function App() {
 
   const handleEquip = (item: ShopItem) => {
       setSelectedShopItem(item);
-      handleViewChange('FARM');
+      setCurrentView('FARM');
   };
 
   const handleCellClick = (index: number) => {
@@ -256,15 +263,7 @@ function App() {
 
   const handleShopSelect = (item: ShopItem) => {
       setSelectedShopItem(item);
-      handleViewChange('FARM'); 
-  };
-
-  const handleDeselect = () => setSelectedShopItem(null);
-
-  const toggleStoreMode = () => {
-      const newMode = !isStoreMode;
-      setIsStoreMode(newMode);
-      if (newMode) setSelectedShopItem(null);
+      setCurrentView('FARM'); 
   };
 
   const handleExchangeUnlock = () => {
@@ -277,7 +276,6 @@ function App() {
       }
   };
 
-  // Weekly Credit Claim Logic
   const handleClaimCredit = () => {
       const now = getServerTime();
       if (gameState.money >= CREDIT_CLAIM_COST) {
@@ -289,7 +287,7 @@ function App() {
                   credits: prev.credits + 1,
                   lastCreditClaimTime: now
               }));
-              alert("Credit Claimed Successfully! Come back next week.");
+              alert("Credit Claimed Successfully!");
           } else {
               alert("Weekly limit reached.");
           }
@@ -298,20 +296,16 @@ function App() {
 
   const handleRebirth = () => {
       const nextRebirthCost = REBIRTH_BASE_COST * Math.pow(1.5, gameState.rebirthLevel);
-      
-      // Must be Level 20 AND have enough money
       if (gameState.level < MAX_LEVEL) {
           alert(`You must reach Level ${MAX_LEVEL} first.`);
           return;
       }
-
       if (gameState.money >= nextRebirthCost) {
           const nextRebirthLevel = gameState.rebirthLevel + 1;
           const bonusMoney = nextRebirthLevel * REBIRTH_BONUS_MONEY;
-
           setGameState(prev => ({
               money: INITIAL_MONEY + bonusMoney,
-              credits: prev.credits, // Keep credits
+              credits: prev.credits,
               grid: Array.from({ length: TOTAL_CELLS }, (_, i) => ({ id: i, itemId: null })),
               inventory: {}, 
               shopStock: getInitialStocks(),
@@ -320,55 +314,36 @@ function App() {
               totalProductionRate: 0,
               rebirthLevel: nextRebirthLevel,
               multiplier: 1 + (nextRebirthLevel * REBIRTH_MULTIPLIER_STEP),
-              isExchangeUnlocked: false, // Relock exchange? Usually yes for prestige.
-              lastCreditClaimTime: prev.lastCreditClaimTime, // Preserve cooldown
-              level: 1 // Reset level
+              isExchangeUnlocked: false,
+              lastCreditClaimTime: prev.lastCreditClaimTime,
+              level: 1
           }));
-          alert(`REBIRTH SUCCESSFUL! +${bonusMoney}$ Bonus Cash & New Items Unlocked!`);
+          alert("REBIRTH SUCCESSFUL!");
       }
   };
 
   const handleReset = () => {
-    // Requires typing 'DELETE' to confirm
-    const userInput = window.prompt("FACTORY RESET WARNING:\nThis will permanently delete your farm, inventory, and credits.\n\nTo confirm, type 'DELETE' in all caps below:");
+    // 1. Ask Confirmation
+    const userInput = window.prompt("FACTORY RESET: Type 'DELETE' to confirm permanent erasure:");
     
     if (userInput === 'DELETE') {
-        // 1. Create a clean state object explicitly
-        const cleanState: GameState = {
-            money: INITIAL_MONEY,
-            credits: 0,
-            grid: Array.from({ length: TOTAL_CELLS }, (_, i) => ({ id: i, itemId: null })),
-            inventory: {},
-            shopStock: getInitialStocks(),
-            nextStockRefresh: Date.now() + STOCK_REFRESH_MS,
-            lastSaveTime: Date.now(),
-            totalProductionRate: 0,
-            rebirthLevel: 0,
-            multiplier: 1,
-            isExchangeUnlocked: false,
-            lastCreditClaimTime: 0,
-            level: 1
-        };
-
-        // 2. FORCE SAVE the clean state to storage immediately.
-        // We do this instead of removeItem to prevent any pending auto-save interval
-        // from writing old state back to storage before the reload happens.
+        // 2. BLOCK Auto-Save Immediately
+        isResettingRef.current = true;
+        
+        // 3. Clear Storage
         try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(cleanState));
-        } catch (e) {
-            console.error("Reset failed", e);
-        }
-        
-        // 3. Update React state immediately (visual feedback)
-        setGameState(cleanState);
-        
-        // 4. Force Reload
-        window.location.reload();
-    } else if (userInput !== null) {
-        alert("Reset cancelled. Text did not match 'DELETE'.");
+            localStorage.clear(); // Nuclear option
+            localStorage.removeItem(STORAGE_KEY);
+        } catch(e) { console.error(e); }
+
+        // 4. Force Reload using href assignment (harder refresh than reload())
+        setTimeout(() => {
+            window.location.href = window.location.href;
+        }, 100);
     }
   };
 
+  // Render logic...
   const renderContent = () => {
       switch (currentView) {
           case 'FARM':
@@ -381,11 +356,11 @@ function App() {
                         </div>
                         <div className="flex gap-2">
                             <button
-                                onClick={toggleStoreMode}
+                                onClick={() => setIsStoreMode(!isStoreMode)}
                                 className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-colors text-xs font-bold ${
                                     isStoreMode 
-                                    ? 'bg-blue-600 text-white border-blue-400 shadow-lg shadow-blue-500/30' 
-                                    : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white hover:bg-slate-700'
+                                    ? 'bg-blue-600 text-white border-blue-400 shadow-lg' 
+                                    : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white'
                                 }`}
                             >
                                 <Archive size={14} /> {isStoreMode ? 'Done Storing' : 'Store Mode'}
@@ -393,10 +368,10 @@ function App() {
 
                             {selectedShopItem && (
                                 <button 
-                                    onClick={handleDeselect}
+                                    onClick={() => setSelectedShopItem(null)}
                                     className="flex items-center gap-2 bg-slate-800 text-slate-400 px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-700 transition-colors text-xs font-bold"
                                 >
-                                    <X size={14} /> Cancel Place
+                                    <X size={14} /> Cancel
                                 </button>
                             )}
                         </div>
@@ -411,6 +386,7 @@ function App() {
                             inventoryCount={selectedShopItem ? (gameState.inventory[selectedShopItem.id] || 0) : 0}
                             isStoreMode={isStoreMode}
                         />
+                        {/* Status Messages */}
                         {selectedShopItem && !isStoreMode && (
                              <div className="mt-4 text-center bg-solar-500/10 border border-solar-500/30 p-2 rounded-lg text-solar-400 text-sm font-medium animate-pulse">
                                 Placing: {selectedShopItem.name} | Available: {gameState.inventory[selectedShopItem.id] || 0}
@@ -418,60 +394,26 @@ function App() {
                         )}
                         {isStoreMode && (
                             <div className="mt-4 text-center bg-blue-500/10 border border-blue-500/30 p-2 rounded-lg text-blue-400 text-sm font-medium">
-                                Tap any system on the grid to move it back to your Inventory.
-                            </div>
-                        )}
-                        {!isStoreMode && !selectedShopItem && (
-                            <div className="mt-4 text-center text-slate-600 text-xs font-medium">
-                                Tip: You can drag and drop systems to rearrange them.
+                                Tap items to store them.
                             </div>
                         )}
                     </div>
                     
                     <div className="flex gap-2 justify-end mt-8 border-t border-slate-800 pt-4">
-                        <button onClick={handleReset} className="flex items-center gap-2 px-3 py-2 text-xs font-bold text-red-900 hover:text-red-400 bg-red-900/10 hover:bg-red-900/30 rounded-lg transition-colors">
-                            <RefreshCw size={14} /> Hard Reset
+                        <button onClick={handleReset} className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-red-100 hover:text-white bg-red-900/50 hover:bg-red-800 rounded-lg transition-colors border border-red-900">
+                            <RefreshCw size={14} /> HARD RESET
                         </button>
                     </div>
                   </div>
               );
           case 'INVENTORY':
-              return (
-                  <Inventory 
-                    inventory={gameState.inventory}
-                    onSell={handleSell}
-                    onEquip={handleEquip}
-                  />
-              );
+              return <Inventory inventory={gameState.inventory} onSell={handleSell} onEquip={handleEquip} />;
           case 'SHOP':
-              return (
-                  <Shop 
-                      money={gameState.money} 
-                      inventory={gameState.inventory}
-                      shopStock={gameState.shopStock}
-                      onBuy={handleBuy}
-                      onSelectItem={handleShopSelect}
-                      selectedItem={selectedShopItem}
-                      nextRefreshTime={gameState.nextStockRefresh}
-                      rebirthLevel={gameState.rebirthLevel}
-                  />
-              );
+              return <Shop money={gameState.money} inventory={gameState.inventory} shopStock={gameState.shopStock} onBuy={handleBuy} onSelectItem={handleShopSelect} selectedItem={selectedShopItem} nextRefreshTime={gameState.nextStockRefresh} rebirthLevel={gameState.rebirthLevel} />;
           case 'CREDITS':
-              return (
-                  <CreditExchange 
-                      gameState={gameState}
-                      onClaimCredit={handleClaimCredit}
-                      onUnlock={handleExchangeUnlock}
-                      serverTime={getServerTime()}
-                  />
-              );
+              return <CreditExchange gameState={gameState} onClaimCredit={handleClaimCredit} onUnlock={handleExchangeUnlock} serverTime={getServerTime()} />;
           case 'REBIRTH':
-              return (
-                  <Rebirth 
-                    gameState={gameState}
-                    onRebirth={handleRebirth}
-                  />
-              );
+              return <Rebirth gameState={gameState} onRebirth={handleRebirth} />;
           default:
               return null;
       }
@@ -482,12 +424,9 @@ function App() {
 
   return (
     <div className="flex h-screen bg-slate-950 text-slate-100 font-sans overflow-hidden">
-        {/* Desktop Sidebar */}
-        <Navigation currentView={currentView} onViewChange={handleViewChange} canRebirth={canRebirth} />
-
+        <Navigation currentView={currentView} onViewChange={(v) => { setCurrentView(v); setIsStoreMode(false); setSelectedShopItem(null); }} canRebirth={canRebirth} />
         <div className="flex-1 flex flex-col h-full overflow-hidden">
             <Header gameState={gameState} isTimeSynced={isTimeSynced} />
-            
             <main className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24 md:pb-6 scroll-smooth">
                 {renderContent()}
             </main>
