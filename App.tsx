@@ -8,9 +8,9 @@ import { Rebirth } from './components/Rebirth';
 import { Inventory } from './components/Inventory';
 import { GameState, ShopItem, ViewType } from './types';
 import { TOTAL_CELLS, INITIAL_MONEY, SHOP_ITEMS, TICK_RATE_MS, AUTO_SAVE_MS, REBIRTH_BASE_COST, REBIRTH_MULTIPLIER_STEP, EXCHANGE_UNLOCK_COST, STOCK_REFRESH_MS, LEVEL_SCALING_FACTOR, MAX_LEVEL, CREDIT_CLAIM_COST, REBIRTH_BONUS_MONEY, ONE_WEEK_MS } from './constants';
-import { RefreshCw, X, Archive, Save } from 'lucide-react';
+import { RefreshCw, X, Archive } from 'lucide-react';
 
-const STORAGE_KEY = 'solar_farm_save_v7'; // Bumped version to invalidate old corrupt saves
+const STORAGE_KEY = 'solar_farm_save_v9'; // Version bump ensures clean slate if needed
 
 // Server Time Utility
 const fetchServerTimeOffset = async (): Promise<number> => {
@@ -20,9 +20,8 @@ const fetchServerTimeOffset = async (): Promise<number> => {
         const data = await response.json();
         const serverTime = new Date(data.datetime).getTime();
         const localTime = Date.now();
-        return serverTime - localTime; // Offset to add to local time
+        return serverTime - localTime; 
     } catch (e) {
-        // Silent fail to local time
         return 0;
     }
 };
@@ -41,13 +40,11 @@ const getInitialState = (): GameState => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
-      
-      // Validation: Check for corrupted numbers (NaN/Infinity)
-      if (!Number.isFinite(parsed.money)) parsed.money = INITIAL_MONEY;
-      if (!Number.isFinite(parsed.level)) parsed.level = 1;
+      // Validate critical fields to prevent "NaN" money errors
+      if (typeof parsed.money !== 'number' || isNaN(parsed.money)) throw new Error("Corrupt money");
       
       return {
-        money: parsed.money ?? INITIAL_MONEY,
+        money: parsed.money,
         credits: parsed.credits ?? 0,
         grid: Array.isArray(parsed.grid) ? parsed.grid : Array.from({ length: TOTAL_CELLS }, (_, i) => ({ id: i, itemId: null })),
         inventory: parsed.inventory || {},
@@ -63,7 +60,7 @@ const getInitialState = (): GameState => {
       };
     }
   } catch (e) {
-    console.warn("Save file corrupted. Starting fresh.", e);
+    console.warn("Save file corrupted or missing. Starting fresh.", e);
   }
   
   // Default State
@@ -92,10 +89,10 @@ function App() {
   const [serverOffset, setServerOffset] = useState<number>(0);
   const [isTimeSynced, setIsTimeSynced] = useState(false);
   
-  // Ref to hold state for auto-save interval
+  // IsResetting prevents the app from auto-saving empty state during the reload gap
+  const [isResetting, setIsResetting] = useState(false);
+  
   const gameStateRef = useRef(gameState);
-  // Ref to block saving during reset
-  const isResettingRef = useRef(false);
 
   useEffect(() => {
     gameStateRef.current = gameState;
@@ -111,7 +108,7 @@ function App() {
 
   const getServerTime = () => Date.now() + serverOffset;
 
-  // Level Calculation & Production Loop
+  // Level & Production Loop
   useEffect(() => {
     const baseRate = gameState.grid.reduce((acc, cell) => {
       if (!cell.itemId) return acc;
@@ -119,7 +116,6 @@ function App() {
       return acc + (item?.productionRate || 0);
     }, 0);
     
-    // Calculate Level
     const rawLevel = Math.floor(Math.sqrt(gameState.money / LEVEL_SCALING_FACTOR)) + 1;
     const newLevel = Math.min(rawLevel, MAX_LEVEL);
 
@@ -133,7 +129,7 @@ function App() {
   // Tick Loop
   useEffect(() => {
     const tick = setInterval(() => {
-      if (isResettingRef.current) return; // Don't tick if resetting
+      if (isResetting) return;
 
       const now = getServerTime();
       setGameState(current => {
@@ -141,7 +137,7 @@ function App() {
             ...current,
             money: current.money + (current.totalProductionRate * current.multiplier)
         };
-        // Stock Refresh Logic
+        // Stock Refresh
         if (now > current.nextStockRefresh) {
             newState.shopStock = getInitialStocks();
             newState.nextStockRefresh = now + STOCK_REFRESH_MS;
@@ -151,17 +147,18 @@ function App() {
     }, TICK_RATE_MS);
 
     return () => clearInterval(tick);
-  }, [serverOffset]); 
+  }, [serverOffset, isResetting]); 
 
   // Auto Save
   useEffect(() => {
     const saveInterval = setInterval(() => {
-      if (!isResettingRef.current) {
+      // Critical: Do not save if resetting
+      if (!isResetting) {
          localStorage.setItem(STORAGE_KEY, JSON.stringify(gameStateRef.current));
       }
     }, AUTO_SAVE_MS);
     return () => clearInterval(saveInterval);
-  }, []);
+  }, [isResetting]);
 
   // --- Actions ---
 
@@ -323,27 +320,30 @@ function App() {
   };
 
   const handleReset = () => {
-    // 1. Ask Confirmation
     const userInput = window.prompt("FACTORY RESET: Type 'DELETE' to confirm permanent erasure:");
     
     if (userInput === 'DELETE') {
-        // 2. BLOCK Auto-Save Immediately
-        isResettingRef.current = true;
+        setIsResetting(true); // Stop rendering game loop immediately
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.clear();
         
-        // 3. Clear Storage
-        try {
-            localStorage.clear(); // Nuclear option
-            localStorage.removeItem(STORAGE_KEY);
-        } catch(e) { console.error(e); }
-
-        // 4. Force Reload using href assignment (harder refresh than reload())
-        setTimeout(() => {
-            window.location.href = window.location.href;
-        }, 100);
+        // Use location.href to force a full browser refresh
+        window.location.href = window.location.href;
     }
   };
 
-  // Render logic...
+  // Safe Render Check during reset
+  if (isResetting) {
+      return (
+          <div className="flex h-screen w-full items-center justify-center bg-slate-950 text-white">
+              <div className="flex flex-col items-center gap-4">
+                  <RefreshCw className="animate-spin text-red-500" size={48} />
+                  <h2 className="text-xl font-bold">Wiping Data & Resetting...</h2>
+              </div>
+          </div>
+      );
+  }
+
   const renderContent = () => {
       switch (currentView) {
           case 'FARM':
@@ -386,7 +386,6 @@ function App() {
                             inventoryCount={selectedShopItem ? (gameState.inventory[selectedShopItem.id] || 0) : 0}
                             isStoreMode={isStoreMode}
                         />
-                        {/* Status Messages */}
                         {selectedShopItem && !isStoreMode && (
                              <div className="mt-4 text-center bg-solar-500/10 border border-solar-500/30 p-2 rounded-lg text-solar-400 text-sm font-medium animate-pulse">
                                 Placing: {selectedShopItem.name} | Available: {gameState.inventory[selectedShopItem.id] || 0}
