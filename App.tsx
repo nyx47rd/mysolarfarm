@@ -10,7 +10,7 @@ import { GameState, ShopItem, ViewType } from './types';
 import { TOTAL_CELLS, INITIAL_MONEY, SHOP_ITEMS, TICK_RATE_MS, AUTO_SAVE_MS, REBIRTH_BASE_COST, REBIRTH_MULTIPLIER_STEP, EXCHANGE_UNLOCK_COST, STOCK_REFRESH_MS, LEVEL_SCALING_FACTOR, MAX_LEVEL, CREDIT_CLAIM_COST, REBIRTH_BONUS_MONEY, ONE_WEEK_MS } from './constants';
 import { RefreshCw, X, Archive } from 'lucide-react';
 
-const STORAGE_KEY = 'solar_farm_save_v9'; // Version bump ensures clean slate if needed
+const STORAGE_KEY = 'solar_farm_save_v10'; // Version bump ensures clean slate if needed
 
 // Server Time Utility
 const fetchServerTimeOffset = async (): Promise<number> => {
