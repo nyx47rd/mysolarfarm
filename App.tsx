@@ -6,6 +6,7 @@ import { Navigation } from './components/Navigation';
 import { CreditExchange } from './components/CreditExchange';
 import { Rebirth } from './components/Rebirth';
 import { Inventory } from './components/Inventory';
+import { RebirthNotification } from './components/RebirthNotification';
 import { GameState, ShopItem, ViewType } from './types';
 import { TOTAL_CELLS, INITIAL_MONEY, SHOP_ITEMS, TICK_RATE_MS, AUTO_SAVE_MS, REBIRTH_BASE_COST, REBIRTH_MULTIPLIER_STEP, EXCHANGE_UNLOCK_COST, STOCK_REFRESH_MS, LEVEL_SCALING_FACTOR, MAX_LEVEL, CREDIT_CLAIM_COST, REBIRTH_BONUS_MONEY, ONE_WEEK_MS } from './constants';
 import { RefreshCw, X, Archive } from 'lucide-react';
@@ -15,13 +16,22 @@ const STORAGE_KEY = 'solar_farm_save_v10'; // Version bump ensures clean slate i
 // Server Time Utility
 const fetchServerTimeOffset = async (): Promise<number> => {
     try {
-        const response = await fetch('https://worldtimeapi.org/api/timezone/Etc/UTC');
+        // Adding a timeout to prevent app hang if API is unreachable
+        const controller = new AbortController();
+        const id = setTimeout(() => controller.abort(), 3000);
+        
+        const response = await fetch('https://worldtimeapi.org/api/timezone/Etc/UTC', {
+            signal: controller.signal
+        });
+        clearTimeout(id);
+        
         if (!response.ok) throw new Error("Time API failed");
         const data = await response.json();
         const serverTime = new Date(data.datetime).getTime();
         const localTime = Date.now();
         return serverTime - localTime; 
     } catch (e) {
+        // Silent fail to local time
         return 0;
     }
 };
@@ -43,12 +53,18 @@ const getInitialState = (): GameState => {
       // Validate critical fields to prevent "NaN" money errors
       if (typeof parsed.money !== 'number' || isNaN(parsed.money)) throw new Error("Corrupt money");
       
+      const defaultStocks = getInitialStocks();
+
       return {
         money: parsed.money,
+        // Migration: If XP doesn't exist, use money (so players don't lose level on update)
+        xp: parsed.xp !== undefined ? parsed.xp : parsed.money,
         credits: parsed.credits ?? 0,
         grid: Array.isArray(parsed.grid) ? parsed.grid : Array.from({ length: TOTAL_CELLS }, (_, i) => ({ id: i, itemId: null })),
+        // Safety: Use default empty object if inventory is missing
         inventory: parsed.inventory || {},
-        shopStock: parsed.shopStock || getInitialStocks(),
+        // Safety: Merge saved stock with default stock to ensure new items appear if added in updates
+        shopStock: { ...defaultStocks, ...(parsed.shopStock || {}) },
         nextStockRefresh: parsed.nextStockRefresh || Date.now() + STOCK_REFRESH_MS,
         lastSaveTime: parsed.lastSaveTime || Date.now(),
         totalProductionRate: parsed.totalProductionRate || 0,
@@ -66,6 +82,7 @@ const getInitialState = (): GameState => {
   // Default State
   return {
     money: INITIAL_MONEY,
+    xp: 0, // Start with 0 XP on a fresh game
     credits: 0,
     grid: Array.from({ length: TOTAL_CELLS }, (_, i) => ({ id: i, itemId: null })),
     inventory: {},
@@ -100,9 +117,18 @@ function App() {
 
   // Sync Time on Mount
   useEffect(() => {
+      // Remove loader when app mounts
+      const loader = document.getElementById('initial-loader');
+      if (loader) {
+          loader.style.opacity = '0';
+          setTimeout(() => loader.remove(), 500);
+      }
+
       fetchServerTimeOffset().then(offset => {
-          setServerOffset(offset);
-          setIsTimeSynced(offset !== 0);
+          if (offset !== 0) {
+            setServerOffset(offset);
+            setIsTimeSynced(true);
+          }
       });
   }, []);
 
@@ -116,7 +142,8 @@ function App() {
       return acc + (item?.productionRate || 0);
     }, 0);
     
-    const rawLevel = Math.floor(Math.sqrt(gameState.money / LEVEL_SCALING_FACTOR)) + 1;
+    // Level is now calculated based on XP, not Money
+    const rawLevel = Math.floor(Math.sqrt(gameState.xp / LEVEL_SCALING_FACTOR)) + 1;
     const newLevel = Math.min(rawLevel, MAX_LEVEL);
 
     setGameState(prev => ({ 
@@ -124,7 +151,7 @@ function App() {
         totalProductionRate: baseRate,
         level: newLevel
     }));
-  }, [gameState.grid, gameState.money]);
+  }, [gameState.grid, gameState.xp]);
 
   // Tick Loop
   useEffect(() => {
@@ -133,9 +160,16 @@ function App() {
 
       const now = getServerTime();
       setGameState(current => {
+        // Stop generating money/xp if at MAX_LEVEL
+        let productionAmount = 0;
+        if (current.level < MAX_LEVEL) {
+            productionAmount = current.totalProductionRate * current.multiplier;
+        }
+
         let newState = {
             ...current,
-            money: current.money + (current.totalProductionRate * current.multiplier)
+            money: current.money + productionAmount,
+            xp: current.xp + productionAmount // XP grows with production
         };
         // Stock Refresh
         if (now > current.nextStockRefresh) {
@@ -163,6 +197,11 @@ function App() {
   // --- Actions ---
 
   const handleBuy = (item: ShopItem, quantity: number) => {
+    if (gameState.level >= MAX_LEVEL) {
+        alert("MAX LEVEL REACHED! You cannot purchase items. You must Rebirth to continue.");
+        return;
+    }
+
     const currentStock = gameState.shopStock[item.id] ?? 0;
     if (currentStock < quantity) {
         alert("Not enough stock!");
@@ -302,6 +341,7 @@ function App() {
           const bonusMoney = nextRebirthLevel * REBIRTH_BONUS_MONEY;
           setGameState(prev => ({
               money: INITIAL_MONEY + bonusMoney,
+              xp: 0, // Reset XP on Rebirth
               credits: prev.credits,
               grid: Array.from({ length: TOTAL_CELLS }, (_, i) => ({ id: i, itemId: null })),
               inventory: {}, 
@@ -424,11 +464,17 @@ function App() {
   return (
     <div className="flex h-screen bg-slate-950 text-slate-100 font-sans overflow-hidden">
         <Navigation currentView={currentView} onViewChange={(v) => { setCurrentView(v); setIsStoreMode(false); setSelectedShopItem(null); }} canRebirth={canRebirth} />
-        <div className="flex-1 flex flex-col h-full overflow-hidden">
+        <div className="flex-1 flex flex-col h-full overflow-hidden relative">
             <Header gameState={gameState} isTimeSynced={isTimeSynced} />
             <main className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24 md:pb-6 scroll-smooth">
                 {renderContent()}
             </main>
+            
+            {/* Rebirth Notification Overlay */}
+            <RebirthNotification 
+                level={gameState.level} 
+                onGoToRebirth={() => setCurrentView('REBIRTH')} 
+            />
         </div>
     </div>
   );

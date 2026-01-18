@@ -9,17 +9,17 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ gameState, isTimeSynced }) => {
-  // Calculate Progress to next level
+  // Calculate Progress to next level based on XP
   const currentLevel = gameState.level;
-  const nextLevel = Math.min(currentLevel + 1, MAX_LEVEL);
   
-  // Inverse level calc to find money thresholds
-  const currentLevelReq = Math.pow(currentLevel - 1, 2) * LEVEL_SCALING_FACTOR;
-  const nextLevelReq = Math.pow(currentLevel, 2) * LEVEL_SCALING_FACTOR;
+  // Inverse level calc to find XP thresholds
+  // Level = sqrt(XP / 500) + 1  =>  XP = (Level - 1)^2 * 500
+  const currentLevelXpReq = Math.pow(currentLevel - 1, 2) * LEVEL_SCALING_FACTOR;
+  const nextLevelXpReq = Math.pow(currentLevel, 2) * LEVEL_SCALING_FACTOR;
   
   const progressPercent = currentLevel === MAX_LEVEL 
     ? 100 
-    : Math.min(100, Math.max(0, ((gameState.money - currentLevelReq) / (nextLevelReq - currentLevelReq)) * 100));
+    : Math.min(100, Math.max(0, ((gameState.xp - currentLevelXpReq) / (nextLevelXpReq - currentLevelXpReq)) * 100));
 
   return (
     <header className="bg-slate-800 border-b border-slate-700 p-3 sticky top-0 z-30 shadow-xl">

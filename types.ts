@@ -28,6 +28,7 @@ export interface GridCell {
 
 export interface GameState {
   money: number;
+  xp: number; // Experience Points for leveling
   credits: number; 
   grid: GridCell[];
   inventory: Record<string, number>; // itemId -> count
