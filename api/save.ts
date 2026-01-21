@@ -1,20 +1,26 @@
 import { neon } from '@neondatabase/serverless';
 
-export default async function handler(request: Request) {
-  if (request.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405 });
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') return res.status(200).end();
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    const { userId, gameState } = await request.json();
+    const { userId, gameState } = req.body;
 
     if (!process.env.DATABASE_URL) {
-      throw new Error('Database connection string missing');
+      return res.status(500).json({ error: 'Database configuration error' });
     }
 
     const sql = neon(process.env.DATABASE_URL);
 
-    // Upsert: Varsa güncelle, yoksa yeni oluştur
+    // Upsert
     await sql`
       INSERT INTO player_saves (user_id, save_data, updated_at)
       VALUES (${userId}, ${gameState}, NOW())
@@ -22,14 +28,9 @@ export default async function handler(request: Request) {
       DO UPDATE SET save_data = ${gameState}, updated_at = NOW();
     `;
 
-    return new Response(JSON.stringify({ success: true }), {
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return res.status(200).json({ success: true });
   } catch (error) {
     console.error('Save Error:', error);
-    return new Response(JSON.stringify({ error: 'Save failed' }), { 
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
+    return res.status(500).json({ error: 'Save failed' });
   }
 }
