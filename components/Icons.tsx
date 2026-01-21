@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sun, Zap, Battery, Cpu, HelpCircle, LayoutDashboard, ShoppingCart, ArrowRightLeft, X, LayoutGrid, Trash2, Lock, Unlock, Atom, Globe, RotateCw, Package, Archive, ArrowDownToLine, Disc, Orbit, Calendar, ShieldCheck } from 'lucide-react';
+import { Sun, Zap, Battery, Cpu, HelpCircle, LayoutDashboard, ShoppingCart, ArrowRightLeft, X, LayoutGrid, Trash2, Lock, Unlock, Atom, Globe, RotateCw, Package, Archive, ArrowDownToLine, Disc, Orbit, Calendar, ShieldCheck, UserPlus, ArrowRight, Check } from 'lucide-react';
 
 interface IconProps {
   name: string;
@@ -31,6 +31,9 @@ export const Icon: React.FC<IconProps> = ({ name, className, size = 20 }) => {
     case 'ArrowDownToLine': return <ArrowDownToLine className={className} size={size} />;
     case 'Calendar': return <Calendar className={className} size={size} />;
     case 'ShieldCheck': return <ShieldCheck className={className} size={size} />;
+    case 'UserPlus': return <UserPlus className={className} size={size} />;
+    case 'ArrowRight': return <ArrowRight className={className} size={size} />;
+    case 'Check': return <Check className={className} size={size} />;
     default: return <HelpCircle className={className} size={size} />;
   }
 };

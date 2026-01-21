@@ -7,20 +7,18 @@ import { CreditExchange } from './components/CreditExchange';
 import { Rebirth } from './components/Rebirth';
 import { Inventory } from './components/Inventory';
 import { RebirthNotification } from './components/RebirthNotification';
+import { AuthScreen } from './components/AuthScreen'; // Import new Auth Screen
 import { GameState, ShopItem, ViewType } from './types';
 import { TOTAL_CELLS, INITIAL_MONEY, SHOP_ITEMS, TICK_RATE_MS, AUTO_SAVE_MS, REBIRTH_BASE_COST, REBIRTH_MULTIPLIER_STEP, EXCHANGE_UNLOCK_COST, STOCK_REFRESH_MS, LEVEL_SCALING_FACTOR, MAX_LEVEL, CREDIT_CLAIM_COST, REBIRTH_BONUS_MONEY, ONE_WEEK_MS } from './constants';
-import { RefreshCw, X, Archive, Cloud, CloudOff } from 'lucide-react';
+import { RefreshCw, X, Archive, Cloud, CloudOff, LogOut } from 'lucide-react';
 
 const STORAGE_KEY = 'solar_farm_save_v10'; 
-// Generate a simplified persistent User ID for this browser if not exists
-const getUserId = () => {
-    let uid = localStorage.getItem('solar_user_id');
-    if (!uid) {
-        uid = 'user_' + Math.random().toString(36).substr(2, 9);
-        localStorage.setItem('solar_user_id', uid);
-    }
-    return uid;
-};
+
+// User interface for session state
+interface User {
+    id: string;
+    username: string;
+}
 
 // Server Time Utility
 const fetchServerTimeOffset = async (): Promise<number> => {
@@ -51,56 +49,29 @@ const getInitialStocks = () => {
     return stocks;
 };
 
-const getInitialState = (): GameState => {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (typeof parsed.money !== 'number' || isNaN(parsed.money)) throw new Error("Corrupt money");
-      
-      const defaultStocks = getInitialStocks();
-
-      return {
-        money: parsed.money,
-        xp: parsed.xp !== undefined ? parsed.xp : parsed.money,
-        credits: parsed.credits ?? 0,
-        grid: Array.isArray(parsed.grid) ? parsed.grid : Array.from({ length: TOTAL_CELLS }, (_, i) => ({ id: i, itemId: null })),
-        inventory: parsed.inventory || {},
-        shopStock: { ...defaultStocks, ...(parsed.shopStock || {}) },
-        nextStockRefresh: parsed.nextStockRefresh || Date.now() + STOCK_REFRESH_MS,
-        lastSaveTime: parsed.lastSaveTime || Date.now(),
-        totalProductionRate: parsed.totalProductionRate || 0,
-        rebirthLevel: parsed.rebirthLevel || 0,
-        multiplier: parsed.multiplier || 1,
-        isExchangeUnlocked: parsed.isExchangeUnlocked || false,
-        lastCreditClaimTime: parsed.lastCreditClaimTime || 0,
-        level: parsed.level || 1
-      };
-    }
-  } catch (e) {
-    console.warn("Save file corrupted or missing. Starting fresh.", e);
-  }
-  
-  return {
-    money: INITIAL_MONEY,
-    xp: 0,
-    credits: 0,
-    grid: Array.from({ length: TOTAL_CELLS }, (_, i) => ({ id: i, itemId: null })),
-    inventory: {},
-    shopStock: getInitialStocks(),
-    nextStockRefresh: Date.now() + STOCK_REFRESH_MS,
-    lastSaveTime: Date.now(),
-    totalProductionRate: 0,
-    rebirthLevel: 0,
-    multiplier: 1,
-    isExchangeUnlocked: false,
-    lastCreditClaimTime: 0,
-    level: 1
-  };
+// Default State Creator
+const createNewGameState = (): GameState => {
+    return {
+        money: INITIAL_MONEY,
+        xp: 0,
+        credits: 0,
+        grid: Array.from({ length: TOTAL_CELLS }, (_, i) => ({ id: i, itemId: null })),
+        inventory: {},
+        shopStock: getInitialStocks(),
+        nextStockRefresh: Date.now() + STOCK_REFRESH_MS,
+        lastSaveTime: Date.now(),
+        totalProductionRate: 0,
+        rebirthLevel: 0,
+        multiplier: 1,
+        isExchangeUnlocked: false,
+        lastCreditClaimTime: 0,
+        level: 1
+    };
 };
 
 function App() {
-  const [gameState, setGameState] = useState<GameState>(getInitialState);
+  const [user, setUser] = useState<User | null>(null); // Auth State
+  const [gameState, setGameState] = useState<GameState>(createNewGameState);
   const [currentView, setCurrentView] = useState<ViewType>('FARM');
   const [selectedShopItem, setSelectedShopItem] = useState<ShopItem | null>(null);
   const [isStoreMode, setIsStoreMode] = useState(false);
@@ -135,6 +106,9 @@ function App() {
 
   // Level & Production Loop
   useEffect(() => {
+    // Only run loop if user is logged in
+    if (!user) return;
+
     const baseRate = gameState.grid.reduce((acc, cell) => {
       if (!cell.itemId) return acc;
       const item = SHOP_ITEMS.find(i => i.id === cell.itemId);
@@ -149,10 +123,12 @@ function App() {
         totalProductionRate: baseRate,
         level: newLevel
     }));
-  }, [gameState.grid, gameState.xp]);
+  }, [gameState.grid, gameState.xp, user]);
 
   // Tick Loop
   useEffect(() => {
+    if (!user) return;
+
     const tick = setInterval(() => {
       if (isResetting) return;
 
@@ -177,62 +153,42 @@ function App() {
     }, TICK_RATE_MS);
 
     return () => clearInterval(tick);
-  }, [serverOffset, isResetting]); 
+  }, [serverOffset, isResetting, user]); 
 
-  // --- SAVE SYSTEM (LOCAL + CLOUD) ---
+  // --- SAVE SYSTEM (CLOUD ONLY NOW) ---
   
-  // 1. Cloud Save Function
   const saveToCloud = async (state: GameState) => {
+      if (!user) return;
       try {
           setCloudStatus('saving');
-          const userId = getUserId();
-          // We use fetch to call the serverless API. This only works when deployed to Vercel.
-          // Locally it might 404 if not using 'vercel dev', which is fine.
           const res = await fetch('/api/save', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ userId, gameState: state })
+              body: JSON.stringify({ userId: user.id, gameState: state })
           });
           
           if (!res.ok) throw new Error("Cloud save failed");
           setCloudStatus('idle');
       } catch (e) {
-          console.warn("Cloud save error (expected if running locally without backend):", e);
+          console.warn("Cloud save error:", e);
           setCloudStatus('error');
       }
   };
 
   useEffect(() => {
-    // 2. Local Storage: Save frequently (1s) for instant feel
-    const localSaveInterval = setInterval(() => {
-      if (!isResetting) {
-         localStorage.setItem(STORAGE_KEY, JSON.stringify(gameStateRef.current));
-      }
-    }, AUTO_SAVE_MS);
+    if (!user) return;
 
-    // 3. Cloud Storage: Save less frequently (15s) to save bandwidth/DB costs
+    // Cloud Storage: Save every 5 seconds since we depend on it now
     const cloudSaveInterval = setInterval(() => {
         if (!isResetting) {
             saveToCloud(gameStateRef.current);
         }
-    }, 15000);
-
-    // 4. Force Save on Close
-    const handleBeforeUnload = () => {
-        if (!isResetting) {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(gameStateRef.current));
-            // Note: Cloud save on unload is unreliable with fetch, sendBeacon is better but 
-            // for simplicity we rely on the frequent intervals + local storage backup.
-        }
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
+    }, 5000);
 
     return () => {
-        clearInterval(localSaveInterval);
         clearInterval(cloudSaveInterval);
-        window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, [isResetting]);
+  }, [isResetting, user]);
 
   // --- Actions ---
 
@@ -404,11 +360,41 @@ function App() {
     
     if (userInput === 'DELETE') {
         setIsResetting(true); 
-        localStorage.removeItem(STORAGE_KEY);
-        localStorage.clear();
-        window.location.href = window.location.href;
+        // Reset DB as well if possible, or just local state and save empty
+        setGameState(createNewGameState());
+        // Trigger save immediately to overwrite DB
+        setTimeout(() => {
+            saveToCloud(createNewGameState()).then(() => window.location.reload());
+        }, 100);
     }
   };
+
+  const handleLogout = () => {
+      saveToCloud(gameStateRef.current).then(() => {
+          setUser(null);
+          setGameState(createNewGameState());
+      });
+  };
+
+  const handleLoginSuccess = (loggedInUser: User, savedData: any) => {
+      setUser(loggedInUser);
+      if (savedData) {
+          // Merge with default to ensure no missing fields
+          const defaultState = createNewGameState();
+          setGameState({
+              ...defaultState,
+              ...savedData,
+              // Ensure critical arrays/objects exist
+              grid: savedData.grid || defaultState.grid,
+              inventory: savedData.inventory || defaultState.inventory,
+              shopStock: savedData.shopStock || defaultState.shopStock
+          });
+      } else {
+          setGameState(createNewGameState());
+      }
+  };
+
+  // --- RENDER ---
 
   if (isResetting) {
       return (
@@ -419,6 +405,11 @@ function App() {
               </div>
           </div>
       );
+  }
+
+  // FORCE LOGIN SCREEN
+  if (!user) {
+      return <AuthScreen onLoginSuccess={handleLoginSuccess} />;
   }
 
   const renderContent = () => {
@@ -512,6 +503,12 @@ function App() {
     <div className="flex h-screen bg-slate-950 text-slate-100 font-sans overflow-hidden">
         <Navigation currentView={currentView} onViewChange={(v) => { setCurrentView(v); setIsStoreMode(false); setSelectedShopItem(null); }} canRebirth={canRebirth} />
         <div className="flex-1 flex flex-col h-full overflow-hidden relative">
+            <div className="bg-slate-900 border-b border-slate-700 px-4 py-1 flex justify-between items-center text-xs text-slate-500">
+                <span>Operator: <span className="text-solar-400 font-bold">{user.username}</span></span>
+                <button onClick={handleLogout} className="flex items-center gap-1 hover:text-white transition-colors">
+                    <LogOut size={12} /> Logout
+                </button>
+            </div>
             <Header gameState={gameState} isTimeSynced={isTimeSynced} />
             <main className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24 md:pb-6 scroll-smooth">
                 {renderContent()}
