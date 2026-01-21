@@ -3,7 +3,7 @@ import { ShopItem, ItemTier } from './types';
 export const GRID_SIZE = 8;
 export const TOTAL_CELLS = GRID_SIZE * GRID_SIZE;
 export const TICK_RATE_MS = 1000; 
-export const AUTO_SAVE_MS = 5000;
+export const AUTO_SAVE_MS = 1000; // Updated to 1 second for near-instant saving
 export const STOCK_REFRESH_MS = 5 * 60 * 1000; // 5 Minutes
 export const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 export const CREDIT_CLAIM_COST = 100000;
